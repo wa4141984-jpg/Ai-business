@@ -1,4 +1,128 @@
-"""AI Resume ATS Analyzer — Streamlit + Google Gemini Flash.
+""import io
+import re
+
+import streamlit as st
+
+try:
+    from docx import Document
+except ModuleNotFoundError:
+    st.error(
+        "The `python-docx` package is not installed. "
+        "Add `python-docx` to requirements.txt and reboot the app."
+    )
+    st.stop()
+
+try:
+    import anthropic
+except ModuleNotFoundError:
+    st.error(
+        "The `anthropic` package is not installed. "
+        "Add `anthropic` to requirements.txt and reboot the app."
+    )
+    st.stop()
+
+MODEL = "claude-sonnet-5-5"
+
+st.set_page_config(page_title="AI Business Document Generator", page_icon="📄")
+st.title("📄 AI Business Document Generator")
+st.caption("Describe your business, generate a document, download it as Word.")
+
+
+def get_api_key() -> str:
+    """Read the key from Streamlit secrets, falling back to a sidebar input."""
+    try:
+        key = st.secrets.get("ANTHROPIC_API_KEY", "")
+    except Exception:
+        key = ""
+    if key:
+        return key
+    return st.sidebar.text_input("Anthropic API key", type="password")
+
+
+def generate_text(api_key: str, prompt: str) -> str:
+    client = anthropic.Anthropic(api_key=api_key)
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=3000,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return "".join(b.text for b in response.content if b.type == "text")
+
+
+def text_to_docx(title: str, text: str) -> bytes:
+    """Convert simple markdown-style text into a .docx file in memory."""
+    doc = Document()
+    doc.add_heading(title, level=0)
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("### "):
+            doc.add_heading(line[4:], level=3)
+        elif line.startswith("## "):
+            doc.add_heading(line[3:], level=2)
+        elif line.startswith("# "):
+            doc.add_heading(line[2:], level=1)
+        elif re.match(r"^[-*•]\s+", line):
+            doc.add_paragraph(re.sub(r"^[-*•]\s+", "", line), style="List Bullet")
+        elif re.match(r"^\d+[.)]\s+", line):
+            doc.add_paragraph(re.sub(r"^\d+[.)]\s+", "", line), style="List Number")
+        else:
+            doc.add_paragraph(line.replace("**", ""))
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    return buffer.getvalue()
+
+
+api_key = get_api_key()
+
+with st.form("inputs"):
+    business_name = st.text_input("Business name")
+    industry = st.text_input("Industry")
+    doc_type = st.selectbox(
+        "Document type",
+        [
+            "Business Plan",
+            "Executive Summary",
+            "Marketing Plan",
+            "Market Analysis",
+            "Pitch Outline",
+        ],
+    )
+    details = st.text_area("Key details (products, customers, goals)", height=150)
+    submitted = st.form_submit_button("Generate")
+
+if submitted:
+    if not api_key:
+        st.warning("Enter your Anthropic API key in the sidebar or in Streamlit secrets.")
+    elif not business_name.strip():
+        st.warning("Please enter a business name.")
+    else:
+        prompt = (
+            f"Write a professional {doc_type} for the following business.\n\n"
+            f"Business name: {business_name}\n"
+            f"Industry: {industry}\n"
+            f"Details: {details}\n\n"
+            "Use markdown headings (#, ##), bullet points where helpful, "
+            "and clear, concise language."
+        )
+        with st.spinner("Generating..."):
+            try:
+                st.session_state["result"] = generate_text(api_key, prompt)
+                st.session_state["title"] = f"{business_name} - {doc_type}"
+            except Exception as e:
+                st.error(f"Generation failed: {e}")
+
+if "result" in st.session_state:
+    st.markdown(st.session_state["result"])
+    st.download_button(
+        "⬇️ Download as Word (.docx)",
+        data=text_to_docx(st.session_state["title"], st.session_state["result"]),
+        file_name=f"{st.session_state['title']}.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )"AI Resume ATS Analyzer — Streamlit + Google Gemini Flash.
 
 Upload a resume (PDF / DOCX / TXT), optionally paste a job description, and get:
   * an estimated ATS score (0-100) with a category breakdown
